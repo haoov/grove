@@ -2,7 +2,6 @@ use sqlx::SqlitePool;
 
 use crate::core::db::models::{Mr, Repo, Worktree};
 use crate::core::db::store;
-use super::gitlab::fetch_and_upsert_mrs;
 use super::client::make_client;
 
 // ─── Shared lookups ───────────────────────────────────────────────────────────
@@ -30,9 +29,11 @@ pub(super) async fn load_mr_context(
 
 // ─── IPC commands ─────────────────────────────────────────────────────────────
 
-/// Returns live MRs for the worktree's branch.
-/// For GitLab repos, queries glab and upserts into DB.
-/// For GitHub or on glab failure, falls back to DB.
+/// The worktree's MRs, from the stored rows.
+///
+/// Lists the branch's MRs on the forge first, in every state, so a merge or a
+/// close on the forge rewrites the stored row. When the list fails, each stored
+/// row is re-read on its own; a row whose read also fails keeps its value.
 #[tauri::command]
 pub async fn get_mr(
     worktree_id: String,
@@ -45,10 +46,19 @@ pub async fn get_mr(
         .await
         .map_err(|e| e.to_string())?;
 
-    if !repo.host.contains("github") {
-        match fetch_and_upsert_mrs(&wt, &repo, &pool).await {
-            Ok(mrs) => return Ok(mrs),
-            Err(e) => tracing::warn!("glab mr list failed: {e}"),
+    let listed = if repo.host.contains("github") {
+        super::github::fetch_and_upsert_prs(&wt, &repo, &pool).await
+    } else {
+        super::gitlab::fetch_and_upsert_mrs(&wt, &repo, &pool).await
+    };
+    if let Err(e) = listed {
+        tracing::warn!("mr list failed for {}: {e}", wt.branch);
+        for mr in store::mrs::for_worktree(&*pool, &worktree_id).await.map_err(|e| e.to_string())? {
+            if let Some(fresh) = mr_state(&repo, &mr.remote_id).await {
+                if fresh != mr.state {
+                    let _ = store::mrs::set_state(&*pool, &mr.id, &fresh).await;
+                }
+            }
         }
     }
 
