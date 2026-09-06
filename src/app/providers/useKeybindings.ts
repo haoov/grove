@@ -260,9 +260,7 @@ export function runCommand(id: CommandId): boolean {
 
     case 'git.cycleSubTab': {
       if (!sess || !inWorkspace || sess.sidebarTab !== 'git') return false;
-      const tabs: GitSubTab[] = sess.kind === 'explorer'
-        ? ['changes', 'commits']
-        : ['changes', 'commits', 'forge'];
+      const tabs: GitSubTab[] = ['changes', 'commits'];
       const idx = tabs.indexOf(sess.gitSubTab);
       const next = tabs[(idx + 1) % tabs.length];
       st.updateSession(sess.id, () => ({ gitSubTab: next }));

@@ -288,7 +288,7 @@ export interface AppNotification extends NotificationInput {
   ephemeral?: boolean;
 }
 /** Sub-modes of the Source-control panel. */
-export type GitSubTab = 'changes' | 'commits' | 'forge';
+export type GitSubTab = 'changes' | 'commits';
 /** Diff comparison base: vs the default branch, vs this branch's remote, or uncommitted work. */
 export type DiffMode = 'vs-main' | 'vs-remote' | 'working';
 
@@ -407,7 +407,7 @@ export interface SessionState {
   annotations: Annotation[];
   mrs: Mr[];
   mrThreadsByRepo: Record<string, MrThread[]>;
-  /** Bumped to refetch MRs + their threads (after mr.* ops, on Forge tab open). */
+  /** Bumped to refetch MRs + their threads (after a push, an mr.* op, the sidebar refresh). */
   mrNonce: number;
   /** Active rebase-in-progress conflict for one of this session's worktrees
    *  (null when none). Set by the rebase_conflict event, cleared by rebase_done. */

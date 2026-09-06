@@ -6,10 +6,12 @@
 //! GraphQL-only); plain CRUD uses REST.
 
 use reqwest::Method;
+use sqlx::SqlitePool;
 
-use crate::core::db::models::Repo;
+use crate::core::db::models::{Mr, Repo, Worktree};
+use crate::core::db::store;
 
-use crate::core::forge::api;
+use crate::core::forge::api::{self, pct};
 use super::client::PlatformClient;
 
 /// `owner` and `repo` as GitHub means them: the group path can be nested in the
@@ -21,6 +23,15 @@ fn owner_of(repo: &Repo) -> &str {
 
 fn pr_path(repo: &Repo, remote_id: &str) -> String {
     format!("repos/{}/{}/pulls/{remote_id}", owner_of(repo), repo.project)
+}
+
+/// REST has no "merged" state: a merged PR stays "closed" with a merged flag.
+fn gh_state(pr: &serde_json::Value) -> String {
+    if pr["merged"].as_bool() == Some(true) || pr["merged_at"].is_string() {
+        "merged".to_string()
+    } else {
+        pr["state"].as_str().unwrap_or("open").to_lowercase()
+    }
 }
 
 /// GraphQL variables addressing one PR.
@@ -228,12 +239,7 @@ impl PlatformClient for GhClient {
 
     async fn get_mr_details(&self, repo: &Repo, remote_id: &str) -> anyhow::Result<serde_json::Value> {
         let v = api::github(&repo.host, Method::GET, &pr_path(repo, remote_id), None).await?;
-        // REST has no "merged" state — it stays "closed" with a merged flag.
-        let state = if v["merged"].as_bool() == Some(true) {
-            "merged".to_string()
-        } else {
-            v["state"].as_str().unwrap_or("open").to_lowercase()
-        };
+        let state = gh_state(&v);
         Ok(serde_json::json!({
             "title": v["title"].as_str().unwrap_or(""),
             "description": v["body"].as_str().unwrap_or(""),
@@ -441,6 +447,36 @@ query($owner:String!, $name:String!, $number:Int!) {
 /// One GraphQL search: `reviewDecision` comes back in the same call, so approval
 /// costs no extra round-trip (GitLab needs one per MR), and REST search has no
 /// branch names — the review session needs both refs to check the PR out.
+/// Every PR whose head is the worktree's branch, whatever its state, upserted
+/// into the DB. The list payload carries no `merged` flag, only `merged_at`.
+pub(super) async fn fetch_and_upsert_prs(
+    wt: &Worktree,
+    repo: &Repo,
+    pool: &SqlitePool,
+) -> anyhow::Result<Vec<Mr>> {
+    let owner = owner_of(repo);
+    let v = api::github(
+        &repo.host,
+        Method::GET,
+        &format!(
+            "repos/{owner}/{}/pulls?head={owner}:{}&state=all&per_page=100",
+            repo.project,
+            pct(&wt.branch)
+        ),
+        None,
+    )
+    .await?;
+
+    let mut result = vec![];
+    for item in v.as_array().cloned().unwrap_or_default() {
+        let number = item["number"].as_u64().unwrap_or(0).to_string();
+        let url = item["html_url"].as_str().unwrap_or("").to_string();
+        let state = gh_state(&item);
+        result.push(store::mrs::upsert(pool, &wt.id, "github", &number, &url, &state).await?);
+    }
+    Ok(result)
+}
+
 pub(super) async fn review_requested_prs(host: &str) -> anyhow::Result<Vec<serde_json::Value>> {
     const QUERY: &str = r#"
 query {
@@ -486,6 +522,20 @@ mod tests {
         let v = pr_vars(&repo("cli", "cli"), "9000");
         assert_eq!(v["number"], 9000);
         assert_eq!(v["owner"], "cli");
+    }
+
+    /// `GET /pulls/{n}` carries `merged`; `GET /pulls` (the list) carries only
+    /// `merged_at`. Both must read as merged.
+    #[test]
+    fn a_merged_pr_reads_merged_from_either_payload() {
+        let detail = serde_json::json!({ "state": "closed", "merged": true });
+        let listed = serde_json::json!({ "state": "closed", "merged_at": "2026-09-01T10:00:00Z" });
+        let closed = serde_json::json!({ "state": "closed", "merged": false, "merged_at": null });
+        let open = serde_json::json!({ "state": "open", "merged": false, "merged_at": null });
+        assert_eq!(gh_state(&detail), "merged");
+        assert_eq!(gh_state(&listed), "merged");
+        assert_eq!(gh_state(&closed), "closed");
+        assert_eq!(gh_state(&open), "open");
     }
 
     #[test]

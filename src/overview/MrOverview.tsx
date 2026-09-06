@@ -83,7 +83,7 @@ export function MrOverview({ repoId, mrId }: { repoId: string; mrId: string }) {
   };
 
   // Live-fetch the rich fields; refetch when the MR data is invalidated
-  // (mr.* ops, Forge tab opens) so the overview tracks remote state.
+  // (a push, an mr.* op, the sidebar's refresh button) so the overview tracks remote state.
   useEffect(() => {
     let stale = false;
     invoke<MrDetails>('get_mr_details', { mrId })

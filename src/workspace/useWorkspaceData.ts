@@ -42,9 +42,8 @@ export function useWorkspaceData() {
     return () => { stale = true; };
   }, [activeTask, diffMode, diffNonce, setDiff, setLastError]);
 
-  // MR + threads per repo. Re-runs when mrNonce bumps — after an mr.* op lands
-  // (create/update/close via the confirmation bridge) and on Forge tab open —
-  // so the Forge section stays in sync without a manual refresh.
+  // MR + threads per repo. Re-runs when mrNonce bumps: after a push, an mr.* op
+  // landing via the confirmation bridge, or the sidebar's refresh button.
   useEffect(() => {
     if (!activeTask || !activeWorktrees.length) return;
     let stale = false;

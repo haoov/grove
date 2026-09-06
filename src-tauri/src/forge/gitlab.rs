@@ -508,7 +508,8 @@ fn describe_ranges(lines: &[i64]) -> String {
     if out.is_empty() { "none".to_string() } else { out.join(", ") }
 }
 
-/// Live MR fetch + DB upsert for GitLab repos.
+/// Every MR on the worktree's branch, whatever its state, upserted into the DB.
+/// No state filter: a merged or closed MR has to rewrite its stored row.
 pub(super) async fn fetch_and_upsert_mrs(
     wt: &Worktree,
     repo: &Repo,
@@ -518,7 +519,7 @@ pub(super) async fn fetch_and_upsert_mrs(
         &repo.host,
         Method::GET,
         &format!(
-            "projects/{}/merge_requests?source_branch={}&state=opened",
+            "projects/{}/merge_requests?source_branch={}&state=all",
             project_ref(repo),
             pct(&wt.branch)
         ),
